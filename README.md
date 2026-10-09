@@ -3,7 +3,7 @@
 Добавлена информация из https://habr.com/ru/companies/lansoft_career/articles/956730/
 
 ## Внутренний аудит
-``` sh
+``` shell
 # Проверяем конфигурацию SSH
 sudo sshd -T | grep -E "port|permitrootlogin|passwordauthentication"
 # Ожидаемый результат:
