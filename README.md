@@ -3,7 +3,7 @@
 Добавлена информация из https://habr.com/ru/companies/lansoft_career/articles/956730/
 
 ## Внутренний аудит
-''' sh
+``` sh
 # Проверяем конфигурацию SSH
 sudo sshd -T | grep -E "port|permitrootlogin|passwordauthentication"
 # Ожидаемый результат:
@@ -31,4 +31,4 @@ sudo ss -tuln | grep LISTEN
 sudo ss -tunap | grep ESTABLISHED
 # Для идентификации незнакомых IP:
 # whois <IP_адрес>
-'''
+```
