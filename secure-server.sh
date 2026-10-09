@@ -40,8 +40,9 @@ cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
 
 # Настраиваем конфиг ssh
 sed -i "/^#\?Port /c\Port $SSH_PORT" /etc/ssh/sshd_config
-sed -i "/^#\?PermitRootLogin /c\PermitRootLogin no" /etc/ssh/sshd_config
+sed -i "/^#\?PermitRootLogin /c\PermitRootLogin prohibit-password" /etc/ssh/sshd_config
 sed -i "/^#\?PasswordAuthentication /c\PasswordAuthentication no" /etc/ssh/sshd_config
+sed -i "/^#\?PubkeyAuthentication  /c\PubkeyAuthentication yes" /etc/ssh/sshd_config
 
 grep -q "^AllowUsers" /etc/ssh/sshd_config || echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config
 sed -i "/^AllowUsers /c\AllowUsers $USERNAME" /etc/ssh/sshd_config

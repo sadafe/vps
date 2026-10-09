@@ -5,11 +5,13 @@
 ## Внутренний аудит
 ``` shell
 # Проверяем конфигурацию SSH
-sudo sshd -T | grep -E "port|permitrootlogin|passwordauthentication"
+sudo sshd -T | grep -E "port|permitrootlogin|passwordauthentication|pubkeyauthentication|kbdinteractiveauthentication"
 # Ожидаемый результат:
 # port 2245 (или ваш порт)
-# permitrootlogin no
+# permitrootlogin prohibit-password
 # passwordauthentication no
+# PubkeyAuthentication yes
+# KbdInteractiveAuthentication no
 # Статус файрвола
 sudo ufw status verbose
 # Проверяем активные правила
