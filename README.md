@@ -33,4 +33,6 @@ sudo ss -tuln | grep LISTEN
 sudo ss -tunap | grep ESTABLISHED
 # Для идентификации незнакомых IP:
 # whois <IP_адрес>
+# Статистика бана за сутки
+cat /var/log/security-check.log
 ```
