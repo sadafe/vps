@@ -9,14 +9,16 @@ git clone https://github.com/sadafe/vps.git && cd vps
 
 с рабочей машины создаем SSH ключ для доступа к серверу
 ``` shell
-ssh-keygen -t ed25519 -C "комментарый" -f .ssh/имяключа
+ssh-keygen -t ed25519 -C "комментарий" -f .ssh/имяключа
 ```
 
 Открываем полученный SSH ключ
+
 Linux
 ``` shell
 nano ~/.ssh/имяключа.pub
 ```
+
 Windows
 ``` shell
 type "%USERPROFILE%\.ssh\имяключа.pub"
