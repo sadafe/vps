@@ -35,4 +35,6 @@ sudo ss -tunap | grep ESTABLISHED
 # whois <IP_адрес>
 # Статистика бана за сутки
 cat /var/log/security-check.log
+# Пост=мотреть кто и когда последний раз авторизировался
+grep "Accepted" /var/log/auth.log
 ```
