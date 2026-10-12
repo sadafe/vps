@@ -42,7 +42,7 @@ echo "------------------------"
 # Обновляем систему
 apt update && apt upgrade -y
 # Устанавливаем необходимые пакеты
-apt install -y ufw fail2ban rkhunter lynis unattended-upgrades sudo
+apt install -y ufw fail2ban unattended-upgrades sudo
 
 # Создаём пользователя (если не существует)
 if ! id "$USERNAME" &>/dev/null; then

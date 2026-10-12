@@ -2,6 +2,35 @@
 
 Добавлена информация из https://habr.com/ru/companies/lansoft_career/articles/956730/
 
+Склонировать репозиторий на хостовую машину
+``` shell
+git clone https://github.com/sadafe/vps.git && cd vps
+```
+
+с рабочей машины создаем SSH ключ для доступа к серверу
+``` shell
+ssh-keygen -t ed25519 -C "комментарый" -f .ssh/имяключа
+```
+
+Открываем полученный SSH ключ
+Linux
+``` shell
+nano ~/.ssh/имяключа.pub
+```
+Windows
+``` shell
+type "%USERPROFILE%\.ssh\имяключа.pub"
+```
+копируем полученный ключ от начала до конца
+
+на хостовой машине запускаем 
+``` shell
+chmod +x secure-server.sh
+./secure-server.sh
+```
+
+
+
 ## Внутренний аудит
 ``` shell
 # Проверяем конфигурацию SSH
