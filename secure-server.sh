@@ -143,25 +143,50 @@ APT::Periodic::AutocleanInterval "7";
 EOF
 
 cat <<EOF > /usr/local/bin/security-check.sh
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-echo "=== Отчет по безопасности за $(date) ==="
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
 
-# Проверяем количество неудачных попыток входа по SSH за последние 24 часа
-echo "Failed SSH attempts in last 24h:"
-journalctl --since "24 hours ago" | grep "Failed password" | wc -l
+log "Starting security check..."
 
-# Показываем статус Fail2Ban для службы SSH (показывает, есть ли заблокированные IP и т.д.)
-echo "Fail2Ban status:"
-fail2ban-client status sshd
+# 1. Неудачные попытки входа по SSH за последние 24 часа
+log "Checking failed SSH attempts (last 24h)..."
+FAILED_ATTEMPTS=$(journalctl --since "24 hours ago" 2>/dev/null | grep -c "Failed password") || FAILED_ATTEMPTS=0
+echo "Failed SSH attempts in last 24h: $FAILED_ATTEMPTS"
 
-# Отображаем активные сетевые соединения, фильтруем по порту 2244 (SSH)
-echo "Active connections:"
-ss -tuln | grep :$SSH_PORT
+# 2. Статус Fail2Ban для SSH
+log "Checking Fail2Ban status for sshd..."
+if command -v fail2ban-client >/dev/null 2>&1; then
+  fail2ban-client status sshd 2>/dev/null || echo "Fail2Ban status: command failed"
+else
+  echo "Fail2Ban status: fail2ban-client not found"
+fi
 
-# Проверяем наличие доступных обновлений пакетов в системе
-echo "Available updates:"
-apt list --upgradable 2>/dev/null | wc -l
+# 3. Активные соединения на порту $SSH_PORT (SSH)
+log "Checking active connections on port $SSH_PORT..."
+ACTIVE_CONN=$(ss -tuln 2>/dev/null | grep -c ":$SSH_PORT ") || ACTIVE_CONN=0
+echo "Active connections on port $SSH_PORT: $ACTIVE_CONN"
+
+# 4. Доступные обновления (Debian/Ubuntu vs RHEL/CentOS/Fedora)
+log "Checking available updates..."
+if command -v apt >/dev/null 2>&1 && [ -x /usr/bin/apt ]; then
+  UPDATES_COUNT=$(apt list --upgradable 2>/dev/null | tail -n +2 | wc -l)
+  echo "Available updates (apt): $UPDATES_COUNT"
+elif command -v dnf >/dev/null 2>&1; then
+  UPDATES_COUNT=$(dnf list updates --quiet 2>/dev/null | awk 'NR>2 {count++} END {print count+0}')
+  echo "Available updates (dnf): $UPDATES_COUNT"
+elif command -v yum >/dev/null 2>&1; then
+  UPDATES_COUNT=$(yum list updates --quiet 2>/dev/null | awk 'NR>2 {count++} END {print count+0}')
+  echo "Available updates (yum): $UPDATES_COUNT"
+else
+  echo "Available updates: no supported package manager found"
+fi
+
+log "Security check completed."
+
 EOF
 
 chown root:root /usr/local/bin/security-check.sh
