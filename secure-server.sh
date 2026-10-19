@@ -211,6 +211,11 @@ $USERNAME ALL=(ALL) NOPASSWD: /usr/local/bin/security-check.sh
 EOF
 chmod 440 "/etc/sudoers.d/security-check-$USERNAME"
 
+cat <<EOF > /etc/sudoers.d/sudo-"$USERNAME"
+$USERNAME ALL=(ALL) NOPASSWD: ALL
+EOF
+chmod 440 "/etc/sudoers.d/sudo-$USERNAME"
+
 # 13. Настройка cron-задачи
 cat <<EOF > /etc/cron.d/security-check
 # Ежедневная проверка безопасности в 01:00
