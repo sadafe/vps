@@ -119,6 +119,7 @@ else
     exit 1
 fi
 
+systemctl disable --now ssh.socket 2>/dev/null
 systemctl restart ssh 2>/dev/null || systemctl restart sshd
 
 # Проверяем, что SSH действительно слушает новый порт
