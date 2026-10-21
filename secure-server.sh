@@ -1,55 +1,72 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo "Автоматическая настройка безопасности VDS"
+# === Цвета для вывода ===
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log()  { echo -e "${GREEN}[✓]${NC} $*"; }
+warn() { echo -e "${YELLOW}[!]${NC} $*"; }
+err()  { echo -e "${RED}[✗]${NC} $*" >&2; }
+
+
+log "Автоматическая настройка безопасности VDS"
 
 # 1. Проверяем, что скрипт запущен от root
 if [ "$EUID" -ne 0 ]; then
-    echo "Ошибка: Запустите скрипт от root (используйте sudo или зайдите под root)"
+    err "Ошибка: Запустите скрипт от root (используйте sudo или зайдите под root)"
     exit 1
 fi
 
 # 2. Проверка ОС (скрипт заточен под Debian/Ubuntu)
 if ! command -v apt >/dev/null 2>&1; then
-    echo "Ошибка: Этот скрипт предназначен только для Debian/Ubuntu."
+    err "Ошибка: Этот скрипт предназначен только для Debian/Ubuntu."
     exit 1
 fi
 
 # 3. Интерактивный ввод данных
 read -p "Введите имя пользователя для создания: " USERNAME
 if [ -z "$USERNAME" ] || [[ ! "$USERNAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "Ошибка: Имя пользователя не может быть пустым и должно содержать только буквы, цифры, _ и -"
+    err "Ошибка: Имя пользователя не может быть пустым и должно содержать только буквы, цифры, _ и -"
     exit 1
 fi
 
-read -p "Введите желаемый порт SSH (например, 2244): " SSH_PORT
+read -p "Введите желаемый порт SSH 1-1024 — потребуются привилегии root для каждого подключения (например, 2244): " SSH_PORT
 if ! [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then
-    echo "Ошибка: Порт должен быть числом от 1 до 65535."
+    err "Ошибка: Порт должен быть числом от 1 до 65535."
+    exit 1
+fi
+
+# === Проверка, что порт свободен ===
+if ss -tlnp | awk '{print $4}' | grep -qE ":${SSH_PORT}\$"; then
+    err "Порт $SSH_PORT уже используется"
     exit 1
 fi
 
 echo "Вставьте ваш публичный SSH-ключ (одной строкой) и нажмите Enter:"
 read -r SSH_KEY
 if [ -z "$SSH_KEY" ]; then
-    echo "Ошибка: SSH-ключ не может быть пустым."
+    err "Ошибка: SSH-ключ не может быть пустым."
     exit 1
 fi
 
 # Базовая проверка формата SSH-ключа
 if [[ ! "$SSH_KEY" =~ ^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp256|sk-ssh-ed25519@openssh.com) ]]; then
-    echo "Ошибка: Неверный формат SSH-ключа. Он должен начинаться с ssh-rsa, ssh-ed25519 и т.д."
+    err "Ошибка: Неверный формат SSH-ключа. Он должен начинаться с ssh-rsa, ssh-ed25519 и т.д."
     exit 1
 fi
 
-echo ""
-echo "--- Введённые данные ---"
-echo "Пользователь: $USERNAME"
-echo "Порт SSH: $SSH_PORT"
-echo "SSH-ключ (первые 20 символов): ${SSH_KEY:0:20}..."
-echo "------------------------"
+log ""
+log "--- Введённые данные ---"
+log "Пользователь: $USERNAME"
+log "Порт SSH: $SSH_PORT"
+log "SSH-ключ (первые 20 символов): ${SSH_KEY:0:20}..."
+log "------------------------"
 read -p "Продолжить? (y/n): " confirm
 if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-    echo "Отменено пользователем."
+    err "Отменено пользователем."
     exit 0
 fi
 
@@ -62,7 +79,7 @@ apt install -y ufw fail2ban unattended-upgrades sudo
 if ! id "$USERNAME" &>/dev/null; then
     adduser --disabled-password --gecos "" "$USERNAME"
     usermod -aG sudo "$USERNAME"
-    echo "Создан пользователь $USERNAME"
+    log "Создан пользователь $USERNAME"
 
     mkdir -p "/home/$USERNAME/.ssh"
     echo "$SSH_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
@@ -75,8 +92,37 @@ else
 fi
 
 # 6. Резервное копирование и настройка sshd_config
+# === Определяем режим работы SSH ===
+USE_SOCKET=0
+if systemctl list-unit-files ssh.socket &>/dev/null && \
+   systemctl is-enabled ssh.socket 2>/dev/null | grep -qE 'enabled|static'; then
+    USE_SOCKET=1
+    log "Обнаружена socket-активация (ssh.socket)"
+else
+    warn "Socket-активация не найдена, будет использоваться классический режим"
+fi
+
+# === Настройка ssh.socket (если используется) ===
+if [[ $USE_SOCKET -eq 1 ]]; then
+    OVERRIDE_DIR="/etc/systemd/system/ssh.socket.d"
+    OVERRIDE_FILE="$OVERRIDE_DIR/override.conf"
+
+    mkdir -p "$OVERRIDE_DIR"
+    cat > "$OVERRIDE_FILE" <<EOF
+[Socket]
+ListenStream=
+ListenStream=${SSH_PORT}
+EOF
+
+    log "Создан override для ssh.socket: $OVERRIDE_FILE"
+
+    systemctl daemon-reload
+    systemctl restart ssh.socket
+    log "ssh.socket перезапущен"
+fi
+
 if [ ! -f /etc/ssh/sshd_config ]; then
-    echo "КРИТИЧЕСКАЯ ОШИБКА: /etc/ssh/sshd_config не найден"
+    err "КРИТИЧЕСКАЯ ОШИБКА: /etc/ssh/sshd_config не найден"
     exit 1
 fi
 cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
@@ -112,20 +158,23 @@ fi
 
 # 7. Проверка и перезапуск SSH
 if sshd -t 2>/dev/null; then
-    echo "SSH конфигурация проверена — OK"
+    log "SSH конфигурация проверена — OK"
 else
-    echo "КРИТИЧЕСКАЯ ОШИБКА в SSH-конфигурации! Выполняется откат изменений..."
+    err "КРИТИЧЕСКАЯ ОШИБКА в SSH-конфигурации! Выполняется откат изменений..."
     cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
     exit 1
 fi
 
-systemctl disable --now ssh.socket 2>/dev/null
-systemctl enable --now ssh 2>/dev/null
-systemctl restart ssh 2>/dev/null || systemctl restart sshd
+if [[ $USE_SOCKET -eq 1 ]]; then
+    systemctl restart ssh.service 2>/dev/null || true
+else
+    systemctl restart sshd 2>/dev/null || systemctl restart ssh
+fi
+log "Сервис SSH перезапущен"
 
 # Проверяем, что SSH действительно слушает новый порт
 if ! ss -tlnp 2>/dev/null | grep -qE ":${SSH_PORT}\b"; then
-    echo "КРИТИЧЕСКАЯ ОШИБКА: SSH не слушает порт $SSH_PORT! Откат UFW не выполнен, проверьте конфиг."
+    err "КРИТИЧЕСКАЯ ОШИБКА: SSH не слушает порт $SSH_PORT! Откат, UFW не выполнен. Проверьте логи: journalctl -u ssh.socket -u ssh."
     exit 1
 fi
 
