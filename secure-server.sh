@@ -73,7 +73,7 @@ fi
 # 4. Обновление системы и установка пакетов
 export DEBIAN_FRONTEND=noninteractive
 apt update && apt upgrade -y
-apt install -y ufw fail2ban unattended-upgrades sudo
+apt install -y ufw fail2ban unattended-upgrades sudo openssh-server
 
 # 5. Создание пользователя и настройка SSH-ключа
 if ! id "$USERNAME" &>/dev/null; then
@@ -156,6 +156,54 @@ else
     echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config
 fi
 
+# Обработка /etc/ssh/sshd_config.d/ (для современных систем)
+SSHD_CONFIG_DIR="/etc/ssh/sshd_config.d"
+if [ -d "$SSHD_CONFIG_DIR" ]; then
+    log "Обнаружена директория $SSHD_CONFIG_DIR"
+    
+    # Создаем файл с нашими настройками безопасности (высокий приоритет)
+    cat <<EOF > "$SSHD_CONFIG_DIR/99-secure.conf"
+# Настройки безопасности от secure-server.sh
+Port ${SSH_PORT}
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+PubkeyAuthentication yes
+MaxAuthTries 3
+MaxSessions 2
+ClientAliveInterval 300
+ClientAliveCountMax 2
+AllowUsers ${USERNAME}
+EOF
+
+    chmod 644 "$SSHD_CONFIG_DIR/99-secure.conf"
+    log "Создан файл $SSHD_CONFIG_DIR/99-secure.conf"
+    
+    # Проверяем и удаляем конфликтующие настройки из других файлов
+    for conf_file in "$SSHD_CONFIG_DIR"/*.conf; do
+        if [ -f "$conf_file" ] && [ "$conf_file" != "$SSHD_CONFIG_DIR/99-secure.conf" ]; then
+            log "Проверяем $conf_file на конфликтующие настройки..."
+            
+            # Удаляем дублирующиеся параметры
+            sed -i -E '/^[[:space:]]*(Port|PermitRootLogin|PasswordAuthentication|PubkeyAuthentication|MaxAuthTries|MaxSessions|ClientAliveInterval|ClientAliveCountMax|AllowUsers)[[:space:]]/d' "$conf_file"
+            
+            # Если файл стал пустым или содержит только комментарии, удаляем его
+            if ! grep -qE '^[^#]' "$conf_file" 2>/dev/null; then
+                rm "$conf_file"
+                log "Удален пустой файл $conf_file"
+            fi
+        fi
+    done
+    
+    # Убеждаемся, что Include директива есть в основном конфиге и стоит в начале
+    if ! grep -q "^Include /etc/ssh/sshd_config.d/\*.conf" /etc/ssh/sshd_config; then
+        # Добавляем Include в начало файла, если его нет
+        sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
+        log "Добавлена директива Include в начало sshd_config"
+    fi
+else
+    log "Директория $SSHD_CONFIG_DIR не найдена, используем только основной конфиг"
+fi
+
 # 7. Проверка и перезапуск SSH
 if sshd -t 2>/dev/null; then
     log "SSH конфигурация проверена — OK"
@@ -193,6 +241,7 @@ cat <<EOF > /etc/fail2ban/jail.local
 bantime = 3600
 findtime = 600
 maxretry = 3
+backend = systemd
 
 [sshd]
 enabled = true
@@ -272,6 +321,20 @@ cat <<EOF > /etc/cron.d/security-check
 0 1 * * * root /usr/local/bin/security-check.sh >> /var/log/security-check.log 2>&1
 EOF
 chmod 644 /etc/cron.d/security-check
+
+# 14. Настройка ротации логов для security-check
+cat <<EOF > /etc/logrotate.d/security-check
+/var/log/security-check.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+}
+EOF
+chmod 644 /etc/logrotate.d/security-check
 
 echo ""
 echo "=========================================="
