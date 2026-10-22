@@ -125,7 +125,21 @@ if [ ! -f /etc/ssh/sshd_config ]; then
     err "КРИТИЧЕСКАЯ ОШИБКА: /etc/ssh/sshd_config не найден"
     exit 1
 fi
-cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+
+# Создаем tar-архив с полной конфигурацией SSH
+BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="/etc/ssh/ssh-config-backup-${BACKUP_TIMESTAMP}.tar.gz"
+
+# Создаем архив с основным конфигом и директорией sshd_config.d (если есть)
+if [ -d /etc/ssh/sshd_config.d ]; then
+    tar -czf "$BACKUP_FILE" -C /etc/ssh sshd_config sshd_config.d 2>/dev/null || \
+    tar -czf "$BACKUP_FILE" -C /etc/ssh sshd_config
+else
+    tar -czf "$BACKUP_FILE" -C /etc/ssh sshd_config
+fi
+
+chmod 600 "$BACKUP_FILE"
+log "Создан tar-архив резервной копии: $BACKUP_FILE"
 
 # Функция для безопасного и идемпотентного обновления параметров sshd_config
 update_sshd_config() {
@@ -209,7 +223,30 @@ if sshd -t 2>/dev/null; then
     log "SSH конфигурация проверена — OK"
 else
     err "КРИТИЧЕСКАЯ ОШИБКА в SSH-конфигурации! Выполняется откат изменений..."
-    cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    
+    # Восстанавливаем из tar-архива
+    if [ -f "$BACKUP_FILE" ]; then
+        # Удаляем текущие файлы перед восстановлением
+        rm -f /etc/ssh/sshd_config
+        rm -rf /etc/ssh/sshd_config.d
+        
+        # Распаковываем архив
+        tar -xzf "$BACKUP_FILE" -C /etc/ssh/
+        
+        # Восстанавливаем права доступа
+        chmod 644 /etc/ssh/sshd_config
+        if [ -d /etc/ssh/sshd_config.d ]; then
+            chmod 755 /etc/ssh/sshd_config.d
+            find /etc/ssh/sshd_config.d -type f -exec chmod 644 {} \;
+        fi
+        
+        log "Конфигурация восстановлена из архива: $BACKUP_FILE"
+        err "Откат выполнен. Проверьте конфигурацию вручную."
+    else
+        err "КРИТИЧЕСКАЯ ОШИБКА: Файл бэкапа $BACKUP_FILE не найден!"
+        err "Невозможно выполнить откат. Восстановите конфигурацию вручную."
+    fi
+    
     exit 1
 fi
 
