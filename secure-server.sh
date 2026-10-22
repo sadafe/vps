@@ -75,6 +75,11 @@ export DEBIAN_FRONTEND=noninteractive
 apt update && apt upgrade -y
 apt install -y ufw fail2ban unattended-upgrades sudo openssh-server
 
+if [ ! -f /etc/ssh/sshd_config ]; then
+    err "КРИТИЧЕСКАЯ ОШИБКА: /etc/ssh/sshd_config не найден"
+    exit 1
+fi
+
 # 5. Создание пользователя и настройка SSH-ключа
 if ! id "$USERNAME" &>/dev/null; then
     adduser --disabled-password --gecos "" "$USERNAME"
@@ -89,41 +94,6 @@ if ! id "$USERNAME" &>/dev/null; then
     echo "Добавлен SSH-ключ для $USERNAME"
 else
     echo "Пользователь $USERNAME уже существует, пропускаем создание."
-fi
-
-# 6. Резервное копирование и настройка sshd_config
-# === Определяем режим работы SSH ===
-USE_SOCKET=0
-if systemctl list-unit-files ssh.socket &>/dev/null && \
-   systemctl is-enabled ssh.socket 2>/dev/null | grep -qE 'enabled|static'; then
-    USE_SOCKET=1
-    log "Обнаружена socket-активация (ssh.socket)"
-else
-    warn "Socket-активация не найдена, будет использоваться классический режим"
-fi
-
-# === Настройка ssh.socket (если используется) ===
-if [[ $USE_SOCKET -eq 1 ]]; then
-    OVERRIDE_DIR="/etc/systemd/system/ssh.socket.d"
-    OVERRIDE_FILE="$OVERRIDE_DIR/override.conf"
-
-    mkdir -p "$OVERRIDE_DIR"
-    cat > "$OVERRIDE_FILE" <<EOF
-[Socket]
-ListenStream=
-ListenStream=${SSH_PORT}
-EOF
-
-    log "Создан override для ssh.socket: $OVERRIDE_FILE"
-
-    systemctl daemon-reload
-    systemctl restart ssh.socket
-    log "ssh.socket перезапущен"
-fi
-
-if [ ! -f /etc/ssh/sshd_config ]; then
-    err "КРИТИЧЕСКАЯ ОШИБКА: /etc/ssh/sshd_config не найден"
-    exit 1
 fi
 
 # Создаем tar-архив с полной конфигурацией SSH
@@ -249,12 +219,38 @@ else
     
     exit 1
 fi
+# 6. Резервное копирование и настройка sshd_config
+# === Определяем режим работы SSH ===
+USE_SOCKET=0
+if systemctl list-unit-files ssh.socket &>/dev/null && \
+   systemctl is-enabled ssh.socket 2>/dev/null | grep -qE 'enabled|static'; then
+    USE_SOCKET=1
+    log "Обнаружена socket-активация (ssh.socket)"
+else
+    warn "Socket-активация не найдена, будет использоваться классический режим"
+fi
 
+# === Настройка ssh.socket (если используется) ===
 if [[ $USE_SOCKET -eq 1 ]]; then
-    systemctl restart ssh.service 2>/dev/null || true
+    OVERRIDE_DIR="/etc/systemd/system/ssh.socket.d"
+    OVERRIDE_FILE="$OVERRIDE_DIR/override.conf"
+
+    mkdir -p "$OVERRIDE_DIR"
+    cat > "$OVERRIDE_FILE" <<EOF
+[Socket]
+ListenStream=
+ListenStream=${SSH_PORT}
+EOF
+
+    log "Создан override для ssh.socket: $OVERRIDE_FILE"
+
+    systemctl daemon-reload
+    systemctl restart ssh.socket
+    log "ssh.socket перезапущен"
 else
     systemctl restart sshd 2>/dev/null || systemctl restart ssh
 fi
+
 log "Сервис SSH перезапущен"
 
 # Проверяем, что SSH действительно слушает новый порт
