@@ -243,9 +243,9 @@ BindIPv6Only=no
 ListenStream=0.0.0.0:${SSH_PORT}
 EOF
 
-    if ip -6 route show default >/dev/null 2>&1; then
-        echo "ListenStream=[::]:${SSH_PORT}" >> "$OVERRIDE_FILE"
-    fi
+#    if ip -6 route show default >/dev/null 2>&1; then
+#        echo "ListenStream=[::]:${SSH_PORT}" >> "$OVERRIDE_FILE"
+#    fi
 
     log "Создан override для ssh.socket: $OVERRIDE_FILE"
 
