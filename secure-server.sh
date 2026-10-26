@@ -149,7 +149,7 @@ if [ -d "$SSHD_CONFIG_DIR" ]; then
     cat <<EOF > "$SSHD_CONFIG_DIR/99-secure.conf"
 # Настройки безопасности от secure-server.sh
 Port ${SSH_PORT}
-PermitRootLogin prohibit-password
+PermitRootLogin no
 PasswordAuthentication no
 PubkeyAuthentication yes
 MaxAuthTries 3
