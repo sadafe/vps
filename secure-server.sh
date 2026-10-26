@@ -86,26 +86,35 @@ if ! id "$USERNAME" &>/dev/null; then
     usermod -aG sudo "$USERNAME"
     log "Создан пользователь $USERNAME"
 
-    mkdir -p "/home/$USERNAME/.ssh"
-    echo "$SSH_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
-    chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
-    chmod 700 "/home/$USERNAME/.ssh"
-    chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
-    echo "Добавлен SSH-ключ для $USERNAME"
 else
     echo "Пользователь $USERNAME уже существует, пропускаем создание."
 fi
+
+mkdir -p "/home/$USERNAME/.ssh"
+echo "$SSH_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
+chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
+chmod 700 "/home/$USERNAME/.ssh"
+chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
+echo "Добавлен SSH-ключ для $USERNAME"
 
 # Создаем tar-архив с полной конфигурацией SSH
 BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="/etc/ssh/ssh-config-backup-${BACKUP_TIMESTAMP}.tar.gz"
 
 # Создаем архив с основным конфигом и директорией sshd_config.d (если есть)
-if [ -d /etc/ssh/sshd_config.d ]; then
-    tar -czf "$BACKUP_FILE" -C /etc/ssh sshd_config sshd_config.d 2>/dev/null || \
-    tar -czf "$BACKUP_FILE" -C /etc/ssh sshd_config
-else
-    tar -czf "$BACKUP_FILE" -C /etc/ssh sshd_config
+tar -czf "$BACKUP_FILE" \
+    -C / \
+    etc/ssh/sshd_config \
+    $( [ -d /etc/ssh/sshd_config.d ] && echo etc/ssh/sshd_config.d ) \
+    $( [ -d /etc/systemd/system/ssh.socket.d ] && echo etc/systemd/system/ssh.socket.d ) \
+    $( [ -f /etc/systemd/system/ssh.service.d/override.conf ] && echo etc/systemd/system/ssh.service.d/override.conf ) \
+    2>/dev/null || true
+
+# Проверяем, что архив валиден
+if ! tar -tzf "$BACKUP_FILE" > /dev/null 2>&1; then
+    echo "Ошибка: архив $BACKUP_FILE невалиден" >&2
+    rm -f "$BACKUP_FILE"
+    exit 1
 fi
 
 chmod 600 "$BACKUP_FILE"
@@ -188,38 +197,6 @@ else
     log "Директория $SSHD_CONFIG_DIR не найдена, используем только основной конфиг"
 fi
 
-# 7. Проверка и перезапуск SSH
-if sshd -t 2>/dev/null; then
-    log "SSH конфигурация проверена — OK"
-else
-    err "КРИТИЧЕСКАЯ ОШИБКА в SSH-конфигурации! Выполняется откат изменений..."
-    
-    # Восстанавливаем из tar-архива
-    if [ -f "$BACKUP_FILE" ]; then
-        # Удаляем текущие файлы перед восстановлением
-        rm -f /etc/ssh/sshd_config
-        rm -rf /etc/ssh/sshd_config.d
-        
-        # Распаковываем архив
-        tar -xzf "$BACKUP_FILE" -C /etc/ssh/
-        
-        # Восстанавливаем права доступа
-        chmod 644 /etc/ssh/sshd_config
-        if [ -d /etc/ssh/sshd_config.d ]; then
-            chmod 755 /etc/ssh/sshd_config.d
-            find /etc/ssh/sshd_config.d -type f -exec chmod 644 {} \;
-        fi
-        
-        log "Конфигурация восстановлена из архива: $BACKUP_FILE"
-        err "Откат выполнен. Проверьте конфигурацию вручную."
-    else
-        err "КРИТИЧЕСКАЯ ОШИБКА: Файл бэкапа $BACKUP_FILE не найден!"
-        err "Невозможно выполнить откат. Восстановите конфигурацию вручную."
-    fi
-    
-    exit 1
-fi
-# 6. Резервное копирование и настройка sshd_config
 # === Определяем режим работы SSH ===
 USE_SOCKET=0
 if systemctl list-unit-files ssh.socket &>/dev/null && \
@@ -249,6 +226,42 @@ EOF
 
     log "Создан override для ssh.socket: $OVERRIDE_FILE"
 
+# 7. Проверка и перезапуск SSH
+if sshd -t 2>/dev/null; then
+    log "SSH конфигурация проверена — OK"
+else
+    err "КРИТИЧЕСКАЯ ОШИБКА в SSH-конфигурации! Выполняется откат изменений..."
+    
+    # Восстанавливаем из tar-архива
+    if [ -f "$BACKUP_FILE" ]; then
+        # Удаляем текущие файлы перед восстановлением
+        rm -f /etc/ssh/sshd_config
+        rm -rf /etc/ssh/sshd_config.d
+        if [[ $USE_SOCKET -eq 1 ]]; then
+            rm -rf "$OVERRIDE_DIR"
+        fi
+        # Распаковываем архив
+        tar -xzf "$BACKUP_FILE" -C /
+        
+        # Восстанавливаем права доступа
+        chmod 644 /etc/ssh/sshd_config
+        if [ -d /etc/ssh/sshd_config.d ]; then
+            chmod 755 /etc/ssh/sshd_config.d
+            find /etc/ssh/sshd_config.d -type f -exec chmod 644 {} \;
+        fi
+        
+        log "Конфигурация восстановлена из архива: $BACKUP_FILE"
+        err "Откат выполнен. Проверьте конфигурацию вручную."
+    else
+        err "КРИТИЧЕСКАЯ ОШИБКА: Файл бэкапа $BACKUP_FILE не найден!"
+        err "Невозможно выполнить откат. Восстановите конфигурацию вручную."
+    fi
+    
+    exit 1
+fi
+
+
+if [[ $USE_SOCKET -eq 1 ]]; then
     systemctl daemon-reload
     systemctl restart ssh.socket
     log "ssh.socket перезапущен"
@@ -259,8 +272,9 @@ fi
 log "Сервис SSH перезапущен"
 
 # Проверяем, что SSH действительно слушает новый порт
-if ! ss -tlnp 2>/dev/null | grep -qE ":${SSH_PORT}\b"; then
-    err "КРИТИЧЕСКАЯ ОШИБКА: SSH не слушает порт $SSH_PORT! Откат, UFW не выполнен. Проверьте логи: journalctl -u ssh.socket -u ssh."
+if ! ss -tlnH 2>/dev/null | awk '{print $4}' | grep -qE "(^0\.0\.0\.0:|^\*:)${SSH_PORT}\b"; then
+    err "КРИТИЧЕСКАЯ ОШИБКА: SSH не слушает порт $SSH_PORT на IPv4 (0.0.0.0)! Откат, UFW не выполнен. Проверьте логи: journalctl -u ssh.socket -u ssh."
+    # добавить восстановление конфигурации SSH из BACKUP_FILE?
     exit 1
 fi
 
