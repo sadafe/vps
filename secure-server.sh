@@ -6,11 +6,82 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="/etc/ssh/ssh-config-backup-${BACKUP_TIMESTAMP}.tar.gz"
+USE_SOCKET=0
 
 log()  { echo -e "${GREEN}[✓]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[✗]${NC} $*" >&2; }
+# Функция для безопасного и идемпотентного обновления параметров sshd_config
+update_sshd_config() {
+    local param="$1"
+    local value="$2"
+    if grep -qE "^[[:space:]]*#?[[:space:]]*${param}[[:space:]]" /etc/ssh/sshd_config; then
+        sed -i -E "s/^[[:space:]]*#?[[:space:]]*${param}[[:space:]].*/${param} ${value}/" /etc/ssh/sshd_config
+    else
+        echo "${param} ${value}" >> /etc/ssh/sshd_config
+    fi
+}
 
+# Создаем tar-архив с полной конфигурацией SSH
+backup_ssh_config() {
+    # Создаем архив с основным конфигом и директорией sshd_config.d (если есть)
+    tar -czf "$BACKUP_FILE" \
+        -C / \
+        etc/ssh/sshd_config \
+        $( [ -d /etc/ssh/sshd_config.d ] && echo etc/ssh/sshd_config.d ) \
+        $( [ -d /etc/systemd/system/ssh.socket.d ] && echo etc/systemd/system/ssh.socket.d ) \
+        $( [ -f /etc/systemd/system/ssh.service.d/override.conf ] && echo etc/systemd/system/ssh.service.d/override.conf ) \
+        2>/dev/null || true
+
+    # Проверяем, что архив валиден
+    if ! tar -tzf "$BACKUP_FILE" > /dev/null 2>&1; then
+        echo "Ошибка: архив $BACKUP_FILE невалиден" >&2
+        rm -f "$BACKUP_FILE"
+        exit 1
+    fi
+
+    chmod 600 "$BACKUP_FILE"
+    log "Создан tar-архив резервной копии: $BACKUP_FILE"
+}
+
+# Восстанавливаем из tar-архива
+unbackup_ssh_config() {
+    if [ -f "$BACKUP_FILE" ]; then
+        # Удаляем текущие файлы перед восстановлением
+        rm -f /etc/ssh/sshd_config
+        rm -rf /etc/ssh/sshd_config.d
+        if [[ $USE_SOCKET -eq 1 ]]; then
+            rm -rf "$OVERRIDE_DIR"
+        fi
+        # Распаковываем архив
+        tar -xzf "$BACKUP_FILE" -C /
+        
+        # Восстанавливаем права доступа
+        chmod 644 /etc/ssh/sshd_config
+        if [ -d /etc/ssh/sshd_config.d ]; then
+            chmod 755 /etc/ssh/sshd_config.d
+            find /etc/ssh/sshd_config.d -type f -exec chmod 644 {} \;
+        fi
+        
+        log "Конфигурация восстановлена из архива: $BACKUP_FILE"
+        err "Откат выполнен. Проверьте конфигурацию вручную."
+    else
+        err "КРИТИЧЕСКАЯ ОШИБКА: Файл бэкапа $BACKUP_FILE не найден!"
+        err "Невозможно выполнить откат. Восстановите конфигурацию вручную."
+    fi
+}
+
+reload_socket() {
+    if [[ $USE_SOCKET -eq 1 ]]; then
+        systemctl daemon-reload
+        systemctl restart ssh.socket
+        log "ssh.socket перезапущен"
+    else
+        systemctl restart sshd 2>/dev/null || systemctl restart ssh
+    fi
+}
 
 log "Автоматическая настройка безопасности VDS"
 
@@ -97,39 +168,7 @@ chmod 700 "/home/$USERNAME/.ssh"
 chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
 echo "Добавлен SSH-ключ для $USERNAME"
 
-# Создаем tar-архив с полной конфигурацией SSH
-BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="/etc/ssh/ssh-config-backup-${BACKUP_TIMESTAMP}.tar.gz"
-
-# Создаем архив с основным конфигом и директорией sshd_config.d (если есть)
-tar -czf "$BACKUP_FILE" \
-    -C / \
-    etc/ssh/sshd_config \
-    $( [ -d /etc/ssh/sshd_config.d ] && echo etc/ssh/sshd_config.d ) \
-    $( [ -d /etc/systemd/system/ssh.socket.d ] && echo etc/systemd/system/ssh.socket.d ) \
-    $( [ -f /etc/systemd/system/ssh.service.d/override.conf ] && echo etc/systemd/system/ssh.service.d/override.conf ) \
-    2>/dev/null || true
-
-# Проверяем, что архив валиден
-if ! tar -tzf "$BACKUP_FILE" > /dev/null 2>&1; then
-    echo "Ошибка: архив $BACKUP_FILE невалиден" >&2
-    rm -f "$BACKUP_FILE"
-    exit 1
-fi
-
-chmod 600 "$BACKUP_FILE"
-log "Создан tar-архив резервной копии: $BACKUP_FILE"
-
-# Функция для безопасного и идемпотентного обновления параметров sshd_config
-update_sshd_config() {
-    local param="$1"
-    local value="$2"
-    if grep -qE "^[[:space:]]*#?[[:space:]]*${param}[[:space:]]" /etc/ssh/sshd_config; then
-        sed -i -E "s/^[[:space:]]*#?[[:space:]]*${param}[[:space:]].*/${param} ${value}/" /etc/ssh/sshd_config
-    else
-        echo "${param} ${value}" >> /etc/ssh/sshd_config
-    fi
-}
+backup_ssh_config()
 
 update_sshd_config "Port" "$SSH_PORT"
 update_sshd_config "PermitRootLogin" "no"
@@ -188,7 +227,7 @@ EOF
     done
     
     # Убеждаемся, что Include директива есть в основном конфиге и стоит в начале
-    if ! grep -q "^Include /etc/ssh/sshd_config.d/\*.conf" /etc/ssh/sshd_config; then
+    if ! grep -qE "^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf" /etc/ssh/sshd_config; then
         # Добавляем Include в начало файла, если его нет
         sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
         log "Добавлена директива Include в начало sshd_config"
@@ -198,17 +237,11 @@ else
 fi
 
 # === Определяем режим работы SSH ===
-USE_SOCKET=0
 if systemctl list-unit-files ssh.socket &>/dev/null && \
    systemctl is-enabled ssh.socket 2>/dev/null | grep -qE 'enabled|static'; then
     USE_SOCKET=1
     log "Обнаружена socket-активация (ssh.socket)"
-else
-    warn "Socket-активация не найдена, будет использоваться классический режим"
-fi
-
-# === Настройка ssh.socket (если используется) ===
-if [[ $USE_SOCKET -eq 1 ]]; then
+    # === Настройка ssh.socket  ===
     OVERRIDE_DIR="/etc/systemd/system/ssh.socket.d"
     OVERRIDE_FILE="$OVERRIDE_DIR/override.conf"
 
@@ -225,56 +258,31 @@ EOF
 #    fi
 
     log "Создан override для ssh.socket: $OVERRIDE_FILE"
+else
+    warn "Socket-активация не найдена, будет использоваться классический режим"
+fi
 
 # 7. Проверка и перезапуск SSH
 if sshd -t 2>/dev/null; then
     log "SSH конфигурация проверена — OK"
 else
     err "КРИТИЧЕСКАЯ ОШИБКА в SSH-конфигурации! Выполняется откат изменений..."
-    
-    # Восстанавливаем из tar-архива
-    if [ -f "$BACKUP_FILE" ]; then
-        # Удаляем текущие файлы перед восстановлением
-        rm -f /etc/ssh/sshd_config
-        rm -rf /etc/ssh/sshd_config.d
-        if [[ $USE_SOCKET -eq 1 ]]; then
-            rm -rf "$OVERRIDE_DIR"
-        fi
-        # Распаковываем архив
-        tar -xzf "$BACKUP_FILE" -C /
-        
-        # Восстанавливаем права доступа
-        chmod 644 /etc/ssh/sshd_config
-        if [ -d /etc/ssh/sshd_config.d ]; then
-            chmod 755 /etc/ssh/sshd_config.d
-            find /etc/ssh/sshd_config.d -type f -exec chmod 644 {} \;
-        fi
-        
-        log "Конфигурация восстановлена из архива: $BACKUP_FILE"
-        err "Откат выполнен. Проверьте конфигурацию вручную."
-    else
-        err "КРИТИЧЕСКАЯ ОШИБКА: Файл бэкапа $BACKUP_FILE не найден!"
-        err "Невозможно выполнить откат. Восстановите конфигурацию вручную."
-    fi
-    
+
+    unbackup_ssh_config()
+
     exit 1
 fi
 
 
-if [[ $USE_SOCKET -eq 1 ]]; then
-    systemctl daemon-reload
-    systemctl restart ssh.socket
-    log "ssh.socket перезапущен"
-else
-    systemctl restart sshd 2>/dev/null || systemctl restart ssh
-fi
+reload_socket()
 
 log "Сервис SSH перезапущен"
 
 # Проверяем, что SSH действительно слушает новый порт
 if ! ss -tlnH 2>/dev/null | awk '{print $4}' | grep -qE "(^0\.0\.0\.0:|^\*:)${SSH_PORT}\b"; then
     err "КРИТИЧЕСКАЯ ОШИБКА: SSH не слушает порт $SSH_PORT на IPv4 (0.0.0.0)! Откат, UFW не выполнен. Проверьте логи: journalctl -u ssh.socket -u ssh."
-    # добавить восстановление конфигурации SSH из BACKUP_FILE?
+    unbackup_ssh_config()
+    reload_socket()
     exit 1
 fi
 
@@ -298,6 +306,15 @@ backend = systemd
 [sshd]
 enabled = true
 port = ${SSH_PORT}
+
+[recidive]
+enabled   = true
+filter = recidive
+logpath   = /var/log/fail2ban.log
+banaction = %(banaction_allports)s
+findtime  = 1d
+maxretry  = 5
+bantime   = 1w
 EOF
 
 systemctl enable fail2ban
