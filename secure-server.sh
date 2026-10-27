@@ -168,7 +168,7 @@ chmod 700 "/home/$USERNAME/.ssh"
 chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
 echo "Добавлен SSH-ключ для $USERNAME"
 
-backup_ssh_config()
+backup_ssh_config
 
 update_sshd_config "Port" "$SSH_PORT"
 update_sshd_config "PermitRootLogin" "no"
@@ -268,21 +268,21 @@ if sshd -t 2>/dev/null; then
 else
     err "КРИТИЧЕСКАЯ ОШИБКА в SSH-конфигурации! Выполняется откат изменений..."
 
-    unbackup_ssh_config()
+    unbackup_ssh_config
 
     exit 1
 fi
 
 
-reload_socket()
+reload_socket
 
 log "Сервис SSH перезапущен"
 
 # Проверяем, что SSH действительно слушает новый порт
 if ! ss -tlnH 2>/dev/null | awk '{print $4}' | grep -qE "(^0\.0\.0\.0:|^\*:)${SSH_PORT}\b"; then
     err "КРИТИЧЕСКАЯ ОШИБКА: SSH не слушает порт $SSH_PORT на IPv4 (0.0.0.0)! Откат, UFW не выполнен. Проверьте логи: journalctl -u ssh.socket -u ssh."
-    unbackup_ssh_config()
-    reload_socket()
+    unbackup_ssh_config
+    reload_socket
     exit 1
 fi
 
