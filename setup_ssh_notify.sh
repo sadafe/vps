@@ -8,7 +8,7 @@ SMTP_HOST="smtp.mail.ru"      # выбери один: smtp.mail.ru или smtp.
 SMTP_PORT="587"
 SCRIPT_PATH="/usr/local/bin/ssh-login-notify.sh"
 PAM_FILE="/etc/pam.d/sshd"
-POSTFIX_DIR="/etc/postfix"
+# POSTFIX_DIR="/etc/postfix"
 
 # Пароли НЕ хранятся в скрипте! Их нужно ввести вручную после запуска
 read -p "Введите адрес электронной почты: " SMTP_USER
@@ -27,8 +27,8 @@ apt install -y  geoip-bin msmtp msmtp-mta
 echo "=== Шаг 2: Создание скрипта уведомления ==="
 cat > "$SCRIPT_PATH" << 'EOF'
 #!/bin/bash
-# Уведомление о входе по SSH. Вызывается pam_exec; окружение там
-# минимальное (только PAM_*), поэтому PATH/HOME задаём явно.
+# Уведомление о входе по SSH через внешний SMTP (msmtp).
+# pam_exec: session optional pam_exec.so quiet /usr/local/bin/ssh-login-notify.sh
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
@@ -37,29 +37,21 @@ if [ "${PAM_TYPE:-}" = "close_session" ]; then
     exit 0
 fi
 
-HOST="$(hostname -f 2>/dev/null || hostname)"
+RECIPIENT="__EMAIL_FROM__"          # ← реальный адрес
+SENDER="__EMAIL_TO__"          # ← тот же, что в from в /etc/msmtprc
+
 USER_NAME="${PAM_USER:-unknown}"
 IP="${PAM_RHOST:-unknown}"
 TTY="${PAM_TTY:-unknown}"
+HOST="$(hostname -f 2>/dev/null || hostname)"
 DATE="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
-# Аудит в системный журнал: без файлов и прав, ротация автоматом
 logger -t ssh-login-notify "login: user=$USER_NAME ip=$IP tty=$TTY host=$HOST"
 
 LOCATION="Location unknown"
 if command -v geoiplookup >/dev/null 2>&1; then
     geo_result="$(geoiplookup "$IP" 2>/dev/null || true)"
     [ -n "$geo_result" ] && LOCATION="$geo_result"
-fi
-
-RECIPIENT="__EMAIL_TO__"   # ← замените на реальный адрес!
-SENDER="__EMAIL_FROM__"    # ← и на этот
-
-# mailx ищет ~/.mailrc — без HOME он может вести себя иначе
-if [ -z "${HOME:-}" ]; then
-    HOME="$(getent passwd "${PAM_USER:-root}" 2>/dev/null | cut -d: -f6)"
-    [ -n "$HOME" ] || HOME=/tmp
-    export HOME
 fi
 
 SUBJECT="SSH Login Alert: $USER_NAME on $HOST"
@@ -70,12 +62,23 @@ $LOCATION
 Date: $DATE
 SSH Client: $TTY"
 
-if command -v mail >/dev/null 2>&1; then
-    if ! echo "$MESSAGE" | mail -s "$SUBJECT" -r "$SENDER" "$RECIPIENT" >/dev/null 2>&1; then
-        logger -t ssh-login-notify -p warning "mail: failed to send message"
-    fi
+# Собираем RFC-заголовки и отдаём msmtp. Он синхронный: возвращается
+# только после ответа SMTP-сервера, код из sysexits.h при сбое.
+if err="$(
+    {
+        printf 'From: %s\n' "$SENDER"
+        printf 'To: %s\n' "$RECIPIENT"
+        printf 'Subject: %s\n' "$SUBJECT"
+        printf 'Content-Type: text/plain; charset=utf-8\n'
+        printf 'Date: %s\n' "$(date -R)"
+        printf '\n'
+        printf '%s\n' "$MESSAGE"
+    } | msmtp -a default -t 2>&1
+)"; then
+    logger -t ssh-login-notify "mail: delivered to $RECIPIENT"
 else
-    logger -t ssh-login-notify -p warning "mail: command not found"
+    rc=$?
+    logger -t ssh-login-notify -p err "mail: FAILED rc=$rc: $err"
 fi
 
 exit 0
@@ -84,42 +87,34 @@ EOF
 sed -i "s/__EMAIL_TO__/$SMTP_USER/g" "$SCRIPT_PATH" 
 sed -i "s/__EMAIL_FROM__/$SMTP_USER/g" "$SCRIPT_PATH"
 
-chmod +x "$SCRIPT_PATH"
+chmod 655 "$SCRIPT_PATH"
 
-echo "=== Шаг 3: Настройка Postfix ==="
-# Бэкап текущей конфигурации
-cp -p "$POSTFIX_DIR/main.cf" "$POSTFIX_DIR/main.cf.bak.$(date +%F-%H%M)"
-cp -p "$POSTFIX_DIR/sasl_passwd" "$POSTFIX_DIR/sasl_passwd.bak.$(date +%F-%H%M)" 2>/dev/null || true
+echo "=== Шаг 3: Настройка Msmtp ==="
+cat > /etc/msmtprc <<EOF
+defaults
+auth           on
+tls            on
+tls_starttls   on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+timeout        15
+syslog         on
 
-# Настройка relayhost
-if ! grep -q "^relayhost" "$POSTFIX_DIR/main.cf"; then
-    echo "relayhost = [$SMTP_HOST]:$SMTP_PORT" >> "$POSTFIX_DIR/main.cf"
-else
-    sed -i "s/^relayhost.*/relayhost = [$SMTP_HOST]:$SMTP_PORT/" "$POSTFIX_DIR/main.cf"
-fi
-
-# Дополнительные настройки TLS и SASL
-cat >> "$POSTFIX_DIR/main.cf" <<EOF
-smtp_use_tls = yes
-smtp_sasl_auth_enable = yes
-smtp_sasl_security_options = noanonymous
-smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
-smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+account default
+host           $SMTP_HOST
+port           587
+from           $EMAIL_FROM
+user           $SMTP_USER
+password_file  /etc/msmtp.password
 EOF
 
-# Файл паролей
-cat > "$POSTFIX_DIR/sasl_passwd" <<EOF
-[$SMTP_HOST]:$SMTP_PORT $SMTP_USER:$SMTP_PASS
+cat > /etc/msmtp.password <<EOF
+$SMTP_PASS
 EOF
 
-chmod 600 "$POSTFIX_DIR/sasl_passwd"
-postmap "$POSTFIX_DIR/sasl_passwd"
+chown root:root /etc/msmtp.password /etc/msmtprc
+chmod 600 /etc/msmtp.password
+chmod 644 /etc/msmtprc
 
-systemctl enable --now postfix
-if ! systemctl is-active --quiet postfix; then
-    echo "ОШИБКА: Postfix не запустился. Проверьте логи: journalctl -u postfix -n 50"
-    exit 1
-fi
 
 echo "=== Шаг 4: Настройка PAM ==="
 cp -p "$PAM_FILE" "$PAM_FILE.bak.$(date +%F-%H%M)"
@@ -152,7 +147,6 @@ echo ""
 echo "=== Готово ==="
 echo "1. Скрипт уведомлений: $SCRIPT_PATH"
 echo "2. Конфигурация PAM: $PAM_FILE (бэкап: ${PAM_FILE}.bak.*)"
-echo "3. Конфигурация Postfix: $POSTFIX_DIR (бэкапы в той же директории)"
 echo ""
 echo "Для теста выполните вход по SSH с другого хоста."
 echo "Логи почты: tail -f /var/log/mail.log"
