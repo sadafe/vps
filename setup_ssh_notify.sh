@@ -104,7 +104,7 @@ host           $SMTP_HOST
 port           587
 from           $EMAIL_FROM
 user           $SMTP_USER
-password_file  /etc/msmtp.password
+passwordeval   cat /etc/msmtp.password
 EOF
 
 cat > /etc/msmtp.password <<EOF
@@ -122,10 +122,10 @@ cp -p "$PAM_FILE" "$PAM_FILE.bak.$(date +%F-%H%M)"
 if ! grep -q "pam_exec.so.*ssh-login-notify.sh" "$PAM_FILE"; then
     # Вставляем строку после pam_limits.so, если она есть, иначе — в конец секции session
     if grep -q "pam_limits.so" "$PAM_FILE"; then
-        sed -i "/pam_limits.so/a session optional pam_exec.so seteuid \"$SCRIPT_PATH\"" "$PAM_FILE"
+        sed -i "/pam_limits.so/a session optional pam_exec.so seteuid quiet "$SCRIPT_PATH"" "$PAM_FILE"
     else
         # Если шаблона нет, добавляем в конец файла
-        echo "session optional pam_exec.so seteuid \"$SCRIPT_PATH\"" >> "$PAM_FILE"
+        echo "session optional pam_exec.so seteuid quiet "$SCRIPT_PATH"" >> "$PAM_FILE"
     fi
 fi
 
