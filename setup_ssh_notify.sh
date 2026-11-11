@@ -2,8 +2,6 @@
 set -euo pipefail
 
 # --- НАСТРОЙКИ (ИЗМЕНИТЕ ПОД СЕБЯ) ---
-EMAIL_TO="krv_1973@mail.ru"
-EMAIL_FROM="krv_1973@mail.ru"
 SMTP_HOST="smtp.mail.ru"      # выбери один: smtp.mail.ru или smtp.gmail.com
 SMTP_PORT="587"
 SCRIPT_PATH="/usr/local/bin/ssh-login-notify.sh"
@@ -102,7 +100,7 @@ syslog         on
 account default
 host           $SMTP_HOST
 port           587
-from           $EMAIL_FROM
+from           $SMTP_USER
 user           $SMTP_USER
 passwordeval   cat /etc/msmtp.password
 EOF
@@ -149,5 +147,3 @@ echo "1. Скрипт уведомлений: $SCRIPT_PATH"
 echo "2. Конфигурация PAM: $PAM_FILE (бэкап: ${PAM_FILE}.bak.*)"
 echo ""
 echo "Для теста выполните вход по SSH с другого хоста."
-echo "Логи почты: tail -f /var/log/mail.log"
-echo "Логи SSH: tail -f /var/log/auth.log"
