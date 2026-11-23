@@ -71,3 +71,8 @@ cat /var/log/security-check.log
 # Посмотреть кто и когда последний раз авторизировался
 grep "Accepted" /var/log/auth.log
 ```
+
+## Addons
+Добавлен скрипт addons.sh (устанавливает zsh с плагинами zsh-autosuggestions и zsh-syntax-highlighting)
+
+Добавлен скрипт setup_ssh_notify.sh отправляет письмо на почту при подключение к серверу по ssh
