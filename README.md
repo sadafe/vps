@@ -33,7 +33,11 @@ chmod +x secure-server.sh
 ./secure-server.sh
 ```
 
-
+после конфигурирование хоста подключаемся
+``` shell
+ssh имя_пользователя@IP_Address -p SSH_port -i имяключа
+./secure-server.sh
+```
 
 ## Внутренний аудит
 ``` shell

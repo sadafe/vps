@@ -55,12 +55,18 @@ else
     echo "plugins=(git zsh-autosuggestions zsh-syntax-highlighting sudo)" >> ~/.zshrc
 fi
 
-# 5. Смена оболочки по умолчанию на zsh
-echo "🐚 Смена оболочки по умолчанию на Zsh..."
-ZSH_PATH=$(which zsh)
+# Смена оболочки по умолчанию на zsh
+ZSH_PATH=$(command -v zsh)
+
+# 1. Убедимся, что zsh есть в /etc/shells
+if ! grep -qx "$ZSH_PATH" /etc/shells 2>/dev/null; then
+    echo "$ZSH_PATH" | sudo tee -a /etc/shells > /dev/null
+fi
+
+# 2. Меняем оболочку (с явным указанием пользователя)
 if [ "$SHELL" != "$ZSH_PATH" ]; then
-    chsh -s "$ZSH_PATH"
-    echo "✅ Оболочка по умолчанию изменена на zsh."
+    sudo chsh -s "$ZSH_PATH" "$USER"
+    echo "✅ Оболочка по умолчанию изменена на $ZSH_PATH"
 else
     echo "ℹ️ Zsh уже является вашей оболочкой по умолчанию."
 fi
