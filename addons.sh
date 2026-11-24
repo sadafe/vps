@@ -9,17 +9,110 @@ echo "🚀 === Начало установки Zsh и Oh My Zsh ==="
 echo "📦 Обновление списков пакетов и установка зависимостей..."
 if command -v apt-get &> /dev/null; then
     sudo apt-get update
-    sudo apt-get install -y zsh git curl
+    sudo apt-get install -y zsh git curl tmux
 elif command -v dnf &> /dev/null; then
-    sudo dnf install -y zsh git curl
+    sudo dnf install -y zsh git curl tmux
 elif command -v yum &> /dev/null; then
-    sudo yum install -y zsh git curl
+    sudo yum install -y zsh git curl tmux
 elif command -v pacman &> /dev/null; then
-    sudo pacman -Sy --noconfirm zsh git curl
+    sudo pacman -Sy --noconfirm zsh git curl tmux
 else
-    echo "❌ Ошибка: Не найден поддерживаемый пакетный менеджер. Установите zsh, git и curl вручную."
+    echo "❌ Ошибка: Не найден поддерживаемый пакетный менеджер. Установите tmux, zsh, git и curl вручную."
     exit 1
 fi
+
+# Установка и настройка tmux
+echo "Настроиваем tmux"
+
+if [ -f ~/.tmux.conf ]; then 
+rm ~/.tmux.conf
+fi
+
+git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+
+# Копирование конфига TODO исправить под себя
+cat <<'EOF' > ~/.tmux.conf 
+set -g default-terminal "screen-256color"
+
+bind s chose-tree -sZ -O name
+set -g base-index 1
+setw -g pane-base-index 1
+
+# remap prefix from 'C-b' to 'C-a'
+unbind C-b
+set-option -g prefix C-a
+bind-key C-a send-prefix
+
+# reload config file (change file location to your the tmux.conf you want to use)
+bind r source-file ~/.tmux.conf
+
+# switch panes using Alt-arrow without prefix
+bind -n M-Left select-pane -L
+bind -n M-Right select-pane -R
+bind -n M-Up select-pane -U
+bind -n M-Down select-pane -D
+
+# Enable mouse control (clickable windows, panes, resizable panes)
+set -g mouse on
+
+# don't rename windows automatically
+set-option -g allow-rename off
+
+# DESIGN TWEAKS
+
+# don't do anything when a 'bell' rings
+set -g visual-activity off
+set -g visual-bell off
+set -g visual-silence off
+setw -g monitor-activity off
+set -g bell-action none
+
+# clock mode
+setw -g clock-mode-colour yellow
+
+# copy mode
+setw -g mode-style 'fg=black bg=red bold'
+
+# panes
+set -g pane-border-style 'fg=red'
+set -g pane-active-border-style 'fg=yellow'
+
+# statusbar
+set -g status-position bottom
+set -g status-justify left
+set -g status-style 'fg=red'
+
+set -g status-left ''
+set -g status-left-length 10
+
+set -g status-right-style 'fg=black bg=yellow'
+set -g status-right '%Y-%m-%d %H:%M '
+set -g status-right-length 50
+
+setw -g window-status-current-style 'fg=black bg=red'
+setw -g window-status-current-format ' #I #W #F '
+
+setw -g window-status-style 'fg=red bg=black'
+setw -g window-status-format ' #I #[fg=white]#W #[fg=yellow]#F '
+
+setw -g window-status-bell-style 'fg=yellow bg=red bold'
+
+# messages
+set -g message-style 'fg=yellow bg=red bold'
+
+# List of plugins
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'tmux-plugins/tmux-sensible'
+set -g @plugin 'tmux-plugins/tmux-resurrect'
+set -g @plugin 'tmux-plugins/tmux-continuum'
+set -g @plugin 'tmux-plugins/tmux-sessionist'
+
+set -g @resurrect-capture-pane-contents 'on'
+set -g @continuum-restore 'on'
+
+# Initialize TMUX plugin manager (keep this line at the very bottom of tmux.conf)
+run '~/.tmux/plugins/tpm/tpm'
+EOF
 
 # 2. Установка Oh My Zsh (в автоматическом режиме без вопросов)
 echo "🛠 Установка Oh My Zsh..."
@@ -47,7 +140,7 @@ fi
 
 # 4. Активация плагинов в .zshrc
 echo "⚙️ Настройка конфигурационного файла ~/.zshrc..."
-if grep -q "^plugins=" ~/.zshrc; then
+if grep -q '^plugins=' ~/.zshrc; then
     # Заменяем существующую строку plugins
     sed -i 's/^plugins=.*/plugins=(git zsh-autosuggestions zsh-syntax-highlighting sudo)/' ~/.zshrc
 else
